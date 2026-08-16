@@ -3,8 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <title>放射藥物預約系統</title>
+  <!-- FullCalendar CDN -->
   <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js'></script>
+  <!-- Supabase CDN -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <!-- SweetAlert2 漂亮彈窗 CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <style>
     body { font-family: sans-serif; margin: 20px; }
     #calendar { height: 750px; width: 95%; margin: 10px auto; border: 1px solid #ccc; }
@@ -63,45 +67,60 @@
         default: return '#333333';
       }
     }
-  
-    document.addEventListener('DOMContentLoaded', async function() {
-      // 1. 登入程序
+
+    // 漂亮登入視窗函數 (SweetAlert2)
+    async function performLogin() {
       let deptData = null;
+
       while (!deptData) {
-        let deptInput = prompt("請輸入您的部門代號 (如 UNE, AH):");
-        if (deptInput === null) return; 
-        if (!deptInput.trim()) { alert("未輸入部門代號，請重新輸入。"); continue; }
-
-        let passInput = prompt("請輸入您的密碼:");
-        if (passInput === null) return;
-        if (!passInput) { alert("未輸入密碼，請重新輸入。"); continue; }
-
-        const deptCode = deptInput.trim().toUpperCase();
-
-        try {
-          const { data, error } = await supabaseClient
-            .from('departments')
-            .select('*')
-            .eq('dept_code', deptCode)
-            .eq('password', passInput)
-            .single();
-
-          if (error || !data) {
-            alert("登入失敗：部門代號或密碼錯誤，請重新登入！");
-          } else {
-            deptData = data;
+        const { value: formValues } = await Swal.fire({
+          title: '請登入系統',
+          html:
+            '<input id="swal-input-dept" class="swal2-input" placeholder="部門代號 (如 UNE, AH)">' +
+            '<input id="swal-input-pass" type="password" class="swal2-input" placeholder="密碼">',
+          focusConfirm: false,
+          allowOutsideClick: false,
+          preConfirm: () => {
+            return [
+              document.getElementById('swal-input-dept').value,
+              document.getElementById('swal-input-pass').value
+            ]
           }
-        } catch (err) {
-          alert("驗證過程發生錯誤: " + err.message + "\n請再試一次。");
+        });
+
+        if (!formValues) return null;
+        const [deptCode, password] = formValues;
+        if (!deptCode || !password) {
+          Swal.showValidationMessage('請輸入代號與密碼');
+          continue;
+        }
+
+        // 驗證邏輯
+        const { data, error } = await supabaseClient
+          .from('departments')
+          .select('*')
+          .eq('dept_code', deptCode.toUpperCase())
+          .eq('password', password)
+          .single();
+
+        if (error || !data) {
+          await Swal.fire({ icon: 'error', title: '登入失敗', text: '代號或密碼錯誤，請重新輸入。' });
+        } else {
+          deptData = data;
+          await Swal.fire({ icon: 'success', title: `歡迎 ${deptData.dept_code}`, timer: 1500, showConfirmButton: false });
         }
       }
+      return deptData;
+    }
 
-      currentUser = deptData;
-      alert(`歡迎 ${currentUser.dept_code} 登入成功！`);
+    document.addEventListener('DOMContentLoaded', async function() {
+      // 1. 執行登入程序
+      currentUser = await performLogin();
+      if (!currentUser) return;
 
       const isAdmin = currentUser.is_admin || currentUser.dept_code === 'UNE';
 
-      // 如果是管理員，顯示「設定某日起預設上限」按鈕
+      // 2. 如果是管理員，顯示「設定某日起預設上限」按鈕
       if (isAdmin) {
         document.getElementById('setGlobalLimitBtn').style.display = 'inline-block';
       }
@@ -128,7 +147,7 @@
         }
       });
 
-      // 載入 PM 區間
+      // 3. 載入 PM 區間
       async function loadPmRanges() {
         const { data, error } = await supabaseClient.from('pm_events').select('*');
         if (!error && data) {
@@ -138,7 +157,7 @@
       }
       loadPmRanges();
 
-      // 2. 公告欄處理
+      // 4. 公告欄處理
       const annDiv = document.getElementById('announcement');
       async function loadAnnouncement() {
         const { data, error } = await supabaseClient.from('announcements').select('message').eq('id', 1).single();
@@ -156,7 +175,7 @@
       });
       loadAnnouncement();
 
-      // 3. 初始化日曆
+      // 5. 初始化日曆
       var calendarEl = document.getElementById('calendar');
       calendar = new FullCalendar.Calendar(calendarEl, {
         initialView: 'dayGridMonth',
@@ -253,8 +272,6 @@
           endDateObj.setDate(endDateObj.getDate() - 1);
           const calculatedEndDateStr = endDateObj.toISOString().split('T')[0];
 
-          const isAdmin = currentUser.is_admin || currentUser.dept_code === 'UNE';
-
           let actionChoice = "1";
 
           if (isAdmin) {
@@ -292,7 +309,7 @@
               return alert("該日期位於系統維護 (PM) 期間，無法進行預約！");
             }
 
-            // 取得每日上限：優先檢查單日覆寫 -> 檢查動態生效規則 -> 預設 2
+            // 取得每日總額度上限：優先檢查單日覆寫 -> 檢查動態生效規則 -> 預設 2
             let dailyLimit = 2;
             const { data: exactLimitData } = await supabaseClient.from('daily_limits').select('max_limit').eq('date', startDateStr).single();
             if (exactLimitData) {
@@ -319,7 +336,7 @@
                 .neq('status', 'Cancelled');
 
               if (!checkError && existingBookings && existingBookings.length >= dailyLimit) {
-                return alert(`該日期 (${startDateStr}) 的預約已達上限（當日最多 ${dailyLimit} 個），無法再新增！`);
+                return alert(`該日期 (${startDateStr}) 的總預約已達上限（當日最多 ${dailyLimit} 個），無法再新增！`);
               }
             }
 
@@ -330,15 +347,30 @@
               targetCenterCode = inputCenter.trim().toUpperCase();
             }
 
+            const { data: center, error: centerErr } = await supabaseClient.from('centers').select('center_id').eq('center_code', targetCenterCode).single();
+            if (centerErr || !center) return alert(`找不到代號為 "${targetCenterCode}" 的中心資料`);
+
+            // --- 新增限制：每個 Center 同一日不能預約超過 1 個 Case，除非登入者是 UNE 幫忙代約 ---
+            if (currentUser.dept_code !== 'UNE') {
+              const { data: centerExistingBookings, error: centerCheckErr } = await supabaseClient
+                .from('bookings')
+                .select('booking_id')
+                .eq('center_id', center.center_id)
+                .gte('injection_time', startDateStr + 'T00:00:00')
+                .lte('injection_time', startDateStr + 'T23:59:59')
+                .neq('status', 'Cancelled');
+
+              if (!centerCheckErr && centerExistingBookings && centerExistingBookings.length > 0) {
+                return alert(`【預約限制】${targetCenterCode} 在該日期 (${startDateStr}) 已經有一個預約案子。每個中心每日限預約 1 個 Case（如需加約請聯絡 UNE 協助代約）！`);
+              }
+            }
+
             let p = prompt("選擇藥物: 1:C-11, 2:F-18");
             if (!p) return;
             const prodName = p === '1' ? 'C-11 Acetate' : 'F-18 PSMA-1007';
 
             const { data: prod, error: prodErr } = await supabaseClient.from('products').select('product_id').ilike('product_name', `%${prodName}%`).single();
             if (prodErr || !prod) return alert("找不到對應的藥物資料");
-
-            const { data: center, error: centerErr } = await supabaseClient.from('centers').select('center_id').eq('center_code', targetCenterCode).single();
-            if (centerErr || !center) return alert(`找不到代號為 "${targetCenterCode}" 的中心資料`);
             
             const bookingDateTime = startDateStr + 'T11:00:00';
 

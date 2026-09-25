@@ -1,0 +1,33 @@
+name: Ping Supabase to Keep Alive
+
+# 設定幾時自動執行（建議每 3 日執行一次，時間用 UTC）
+on:
+  schedule:
+    # 意思係：每 3 日嘅午夜 00:00 執行一次
+    - cron: '0 0 */3 * *'
+  # 允許你喺 GitHub 網頁手動按掣測試
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Request to Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          # 呢度會去 ping Supabase 嘅 REST API 嘅 health check endpoint
+          response=$(curl -s -o /dev/null -w "%{http_code}" \
+            "$SUPABASE_URL/auth/v1/health" \
+            -H "apikey: $SUPABASE_ANON_KEY")
+          
+          echo "Supabase Response Status Code: $response"
+          
+          # 檢查狀態碼，如果係 200 就代表成功喚醒
+          if [ "$response" -eq 200 ]; then
+            echo "Successfully pinged Supabase!"
+          else
+            echo "Failed to ping Supabase. Status: $response"
+            exit 1
+          fi
